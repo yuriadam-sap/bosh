@@ -6,6 +6,7 @@ require 'bosh/director/dns/canonicalizer'
 module Bosh
   module Director
     class MetricsCollector
+    LONG_RUNNING_TASK_THRESHOLD_SECONDS = 12 * 60 * 60
       def initialize(config)
         @config = config
         @logger = config.metrics_server_logger
@@ -69,6 +70,13 @@ module Bosh
           labels: %i[name],
           docstring: 'Number of instances with unknown job_state per deployment',
         )
+
+        @long_running_tasks = Prometheus::Client.registry.gauge(
+          :bosh_long_running_tasks_total,
+          labels: %i[type deployment_name],
+          docstring: 'Number of BOSH tasks that have been in processing state for more than 12 hours',
+        )
+
         @scheduler = Rufus::Scheduler.new
       end
 
@@ -138,7 +146,31 @@ module Bosh
 
         populate_vm_metrics
 
+        populate_long_running_task_metrics
+
         @logger.info('populated metrics')
+      end
+
+      def populate_long_running_task_metrics
+        threshold_time = Time.now - LONG_RUNNING_TASK_THRESHOLD_SECONDS
+
+        counts_by_key = {}
+        Models::Task.select(:type, :deployment_name).distinct.each do |task|
+          counts_by_key[[task.type, task.deployment_name.to_s]] = 0
+        end
+
+        Models::Task
+          .where(state: 'processing')
+          .where { started_at < threshold_time }
+          .group_and_count(:type, :deployment_name)
+          .each do |task|
+            key = [task.values[:type], task.values[:deployment_name].to_s]
+            counts_by_key[key] = task.values[:count]
+          end
+
+        counts_by_key.each do |(type, deployment_name), count|
+          @long_running_tasks.set(count, labels: { type: type, deployment_name: deployment_name })
+        end
       end
 
       def populate_vm_metrics

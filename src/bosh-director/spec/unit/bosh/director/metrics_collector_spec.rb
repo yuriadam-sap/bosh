@@ -59,6 +59,7 @@ module Bosh::Director
       Prometheus::Client.registry.unregister(:bosh_failing_instances)
       Prometheus::Client.registry.unregister(:bosh_stopped_instances)
       Prometheus::Client.registry.unregister(:bosh_unknown_instances)
+      Prometheus::Client.registry.unregister(:bosh_long_running_tasks_total)
     end
 
     describe '#prep' do
@@ -423,6 +424,54 @@ module Bosh::Director
           metric = Prometheus::Client.registry.get(:bosh_tasks_total)
           expect(metric.get(labels: { state: 'queued', type: 'foobaz' })).to eq(0)
           expect(metric.get(labels: { state: 'processing', type: 'foobaz' })).to eq(2)
+        end
+      end
+
+      describe 'long running task metrics' do
+        let(:threshold) { MetricsCollector::LONG_RUNNING_TASK_THRESHOLD_SECONDS }
+
+        it 'counts processing tasks running longer than the threshold by type and deployment' do
+          FactoryBot.create(:models_task, state: 'processing', type: 'deploy', deployment_name: 'cf', started_at: Time.now - threshold - 1)
+          FactoryBot.create(:models_task, state: 'processing', type: 'deploy', deployment_name: 'cf', started_at: Time.now - threshold - 3600)
+          FactoryBot.create(:models_task, state: 'processing', type: 'deploy', deployment_name: 'other', started_at: Time.now - threshold - 1)
+          FactoryBot.create(:models_task, state: 'processing', type: 'scan_and_fix', deployment_name: 'cf', started_at: Time.now - threshold - 1)
+          FactoryBot.create(:models_task, state: 'processing', type: 'deploy', deployment_name: 'cf', started_at: Time.now - 60)
+          FactoryBot.create(:models_task, state: 'queued', type: 'deploy', deployment_name: 'cf', started_at: Time.now - threshold - 1)
+
+          metrics_collector.start
+          metric = Prometheus::Client.registry.get(:bosh_long_running_tasks_total)
+          expect(metric.get(labels: { type: 'deploy', deployment_name: 'cf' })).to eq(2)
+          expect(metric.get(labels: { type: 'deploy', deployment_name: 'other' })).to eq(1)
+          expect(metric.get(labels: { type: 'scan_and_fix', deployment_name: 'cf' })).to eq(1)
+        end
+
+        it 'emits 0 for type/deployment combinations with no long-running tasks' do
+          FactoryBot.create(:models_task, state: 'processing', type: 'deploy', deployment_name: 'cf', started_at: Time.now - 60)
+
+          metrics_collector.start
+          metric = Prometheus::Client.registry.get(:bosh_long_running_tasks_total)
+          expect(metric.get(labels: { type: 'deploy', deployment_name: 'cf' })).to eq(0)
+        end
+
+        it 'uses empty string for tasks without a deployment name' do
+          FactoryBot.create(:models_task, state: 'processing', type: 'update_cloud_config', deployment_name: nil, started_at: Time.now - threshold - 1)
+
+          metrics_collector.start
+          metric = Prometheus::Client.registry.get(:bosh_long_running_tasks_total)
+          expect(metric.get(labels: { type: 'update_cloud_config', deployment_name: '' })).to eq(1)
+        end
+
+        it 'updates counts on subsequent ticks' do
+          task = FactoryBot.create(:models_task, state: 'processing', type: 'deploy', deployment_name: 'cf', started_at: Time.now - 60)
+
+          metrics_collector.start
+          metric = Prometheus::Client.registry.get(:bosh_long_running_tasks_total)
+          expect(metric.get(labels: { type: 'deploy', deployment_name: 'cf' })).to eq(0)
+
+          task.update(started_at: Time.now - threshold - 1)
+          scheduler.tick
+
+          expect(metric.get(labels: { type: 'deploy', deployment_name: 'cf' })).to eq(1)
         end
       end
     end
