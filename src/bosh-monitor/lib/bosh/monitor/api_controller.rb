@@ -81,60 +81,19 @@ module Bosh::Monitor
       end
     end
 
-    # Resurrector meltdown state endpoints.
-    # These endpoints are only available once the resurrector plugin has registered
-    # its AlertTracker via Bosh::Monitor.resurrector_alert_tracker.
-    # Returns 503 if the resurrector is not configured or initial sync is not done.
-
     get '/resurrector_meltdown' do
-      tracker = Bosh::Monitor.resurrector_alert_tracker
-      unless tracker && @instance_manager.director_initial_deployment_sync_done
+      unless @instance_manager.director_initial_deployment_sync_done
         status(503)
         next
       end
 
-      result = {}
-      @instance_manager.deployments.each_key do |deployment|
-        state = tracker.state_for(deployment)
-        result[deployment] = if state.meltdown?
-                               2
-                             elsif state.managed?
-                               1
-                             else
-                               0
-                             end
-      end
-      JSON.generate(result)
-    end
-
-    get '/resurrector_unhealthy_count' do
-      tracker = Bosh::Monitor.resurrector_alert_tracker
-      unless tracker && @instance_manager.director_initial_deployment_sync_done
-        status(503)
+      meltdown_data = @instance_manager.resurrector_meltdown_deployments
+      if meltdown_data.nil?
+        status(404)
         next
       end
 
-      result = {}
-      @instance_manager.deployments.each_key do |deployment|
-        state = tracker.state_for(deployment)
-        result[deployment] = state.unhealthy_count
-      end
-      JSON.generate(result)
-    end
-
-    get '/resurrector_unhealthy_percent' do
-      tracker = Bosh::Monitor.resurrector_alert_tracker
-      unless tracker && @instance_manager.director_initial_deployment_sync_done
-        status(503)
-        next
-      end
-
-      result = {}
-      @instance_manager.deployments.each_key do |deployment|
-        state = tracker.state_for(deployment)
-        result[deployment] = state.unhealthy_percent
-      end
-      JSON.generate(result)
+      JSON.generate(meltdown_data)
     end
   end
 end

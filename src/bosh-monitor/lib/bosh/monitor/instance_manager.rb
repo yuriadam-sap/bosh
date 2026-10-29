@@ -18,6 +18,7 @@ module Bosh::Monitor
       @alerts_received = 0
       @alerts_processed = 0
       @director_initial_deployment_sync_done = false
+      @alert_tracker = nil
 
       @processor = event_processor
     end
@@ -53,7 +54,11 @@ module Bosh::Monitor
     def setup_events
       @processor.enable_pruning(Bosh::Monitor.intervals.prune_events)
       Bosh::Monitor.plugins.each do |plugin|
-        @processor.add_plugin(lookup_plugin(plugin['name'], plugin['options']), plugin['events'])
+        plugin_instance = lookup_plugin(plugin['name'], plugin['options'])
+        @processor.add_plugin(plugin_instance, plugin['events'])
+        if plugin_instance.is_a?(Bosh::Monitor::Plugins::Resurrector)
+          @alert_tracker = plugin_instance.alert_tracker
+        end
       end
 
       Bosh::Monitor.nats.subscribe('hm.agent.heartbeat.*') do |message, _reply, subject|
@@ -169,6 +174,18 @@ module Bosh::Monitor
       agents_hash['unmanaged'] = @unmanaged_agents.keys.size
 
       agents_hash
+    end
+
+    # Returns a hash of deployment_name => state string ('normal', 'managed', 'meltdown').
+    # Returns nil if no resurrector plugin is configured.
+    def resurrector_meltdown_deployments
+      return nil unless @alert_tracker
+
+      result = {}
+      @deployment_name_to_deployments.each_key do |name|
+        result[name] = @alert_tracker.state_for(name).to_s
+      end
+      result
     end
 
     def analyze_agents

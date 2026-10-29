@@ -88,6 +88,12 @@ module Bosh::Monitor::Plugins
       STATE_MANAGED = 'managed'.freeze
       STATE_MELTDOWN = 'meltdown'.freeze
 
+      STATE_NUMERIC = {
+        STATE_NORMAL => 0,
+        STATE_MANAGED => 1,
+        STATE_MELTDOWN => 2,
+      }.freeze
+
       def initialize(deployment, agent_count, unhealthy_count, thresholds)
         @deployment = deployment
         @agent_count = agent_count
@@ -108,16 +114,12 @@ module Bosh::Monitor::Plugins
         state == STATE_NORMAL
       end
 
-      def state_name
+      def to_s
         state
       end
 
-      def unhealthy_count
-        @unhealthy_count
-      end
-
-      def unhealthy_percent
-        @unhealthy_percent ||= (@unhealthy_count.to_f / @agent_count)
+      def to_i
+        STATE_NUMERIC.fetch(state, 0)
       end
 
       def summary
@@ -134,6 +136,10 @@ module Bosh::Monitor::Plugins
         end
 
         STATE_NORMAL
+      end
+
+      def unhealthy_percent
+        @unhealthy_percent ||= (@unhealthy_count.to_f / @agent_count)
       end
     end
   end
