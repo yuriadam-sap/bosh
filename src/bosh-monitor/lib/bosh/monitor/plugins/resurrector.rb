@@ -7,6 +7,8 @@ module Bosh::Monitor
       include HttpRequestHelper
       include Bosh::Monitor::Events
 
+      attr_reader :alert_tracker
+
       def initialize(options = {})
         super(options)
         director = @options['director']

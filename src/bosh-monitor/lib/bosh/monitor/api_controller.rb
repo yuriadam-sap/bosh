@@ -80,5 +80,20 @@ module Bosh::Monitor
         status(503)
       end
     end
+
+    get '/resurrector_meltdown' do
+      unless @instance_manager.director_initial_deployment_sync_done
+        status(503)
+        next
+      end
+
+      meltdown_data = @instance_manager.resurrector_meltdown_deployments
+      if meltdown_data.nil?
+        status(404)
+        next
+      end
+
+      JSON.generate(meltdown_data)
+    end
   end
 end

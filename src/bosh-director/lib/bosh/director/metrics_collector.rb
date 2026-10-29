@@ -6,6 +6,12 @@ require 'bosh/director/dns/canonicalizer'
 module Bosh
   module Director
     class MetricsCollector
+      MELTDOWN_STATE_NUMERIC = {
+        'normal' => 0,
+        'managed' => 1,
+        'meltdown' => 2,
+      }.freeze
+
       def initialize(config)
         @config = config
         @logger = config.metrics_server_logger
@@ -69,6 +75,24 @@ module Bosh
           labels: %i[name],
           docstring: 'Number of instances with unknown job_state per deployment',
         )
+
+        @resurrector_meltdown_active = Prometheus::Client.registry.gauge(
+          :bosh_resurrector_meltdown_active,
+          docstring: 'Is any deployment currently in resurrector meltdown? 0 for no, 1 for yes',
+        )
+
+        @resurrector_deployments_meltdown = Prometheus::Client.registry.gauge(
+          :bosh_resurrector_deployments_meltdown,
+          labels: %i[name],
+          docstring: 'Is this deployment in resurrector meltdown? 0 for no, 1 for yes',
+        )
+
+        @resurrector_deployments_state = Prometheus::Client.registry.gauge(
+          :bosh_resurrector_deployments_state,
+          labels: %i[name],
+          docstring: 'Resurrector state for this deployment: 0=normal, 1=managed (resurrection active), 2=meltdown',
+        )
+
         @scheduler = Rufus::Scheduler.new
       end
 
@@ -138,6 +162,8 @@ module Bosh
 
         populate_vm_metrics
 
+        populate_meltdown_metrics
+
         @logger.info('populated metrics')
       end
 
@@ -148,6 +174,39 @@ module Bosh
         fetch_and_update_gauge('/failing_instances', @failing_instances)
         fetch_and_update_gauge('/stopped_instances', @stopped_instances)
         fetch_and_update_gauge('/unknown_instances', @unknown_instances)
+      end
+
+      def populate_meltdown_metrics
+        response = Net::HTTP.get_response('127.0.0.1', '/resurrector_meltdown', @config.health_monitor_port)
+        return unless response.is_a?(Net::HTTPSuccess)
+
+        begin
+          deployment_states = JSON.parse(response.body)
+        rescue JSON::ParserError => e
+          @logger.warn("Failed to parse JSON response from /resurrector_meltdown: #{e.message}")
+          return
+        end
+        return unless deployment_states.is_a?(Hash)
+
+        any_meltdown = 0
+        existing_deployments = @resurrector_deployments_meltdown.values.map { |key, _| key[:name] }
+
+        deployment_states.each do |deployment, state_str|
+          is_meltdown = state_str == 'meltdown' ? 1 : 0
+          any_meltdown = 1 if is_meltdown == 1
+          state_numeric = MELTDOWN_STATE_NUMERIC.fetch(state_str, 0)
+
+          @resurrector_deployments_meltdown.set(is_meltdown, labels: { name: deployment })
+          @resurrector_deployments_state.set(state_numeric, labels: { name: deployment })
+        end
+
+        @resurrector_meltdown_active.set(any_meltdown)
+
+        removed_deployments = existing_deployments - deployment_states.keys
+        removed_deployments.each do |deployment|
+          @resurrector_deployments_meltdown.set(0, labels: { name: deployment })
+          @resurrector_deployments_state.set(0, labels: { name: deployment })
+        end
       end
 
       def fetch_and_update_gauge(endpoint, gauge)
