@@ -108,6 +108,18 @@ module Bosh::Monitor::Plugins
         state == STATE_NORMAL
       end
 
+      def state_name
+        state
+      end
+
+      def unhealthy_count
+        @unhealthy_count
+      end
+
+      def unhealthy_percent
+        @unhealthy_percent ||= (@unhealthy_count.to_f / @agent_count)
+      end
+
       def summary
         "deployment: '#{@deployment}'; #{@unhealthy_count} of #{@agent_count} agents are unhealthy (#{(unhealthy_percent * 100).round(1)}%)"
       end
@@ -122,10 +134,6 @@ module Bosh::Monitor::Plugins
         end
 
         STATE_NORMAL
-      end
-
-      def unhealthy_percent
-        @unhealthy_percent ||= (@unhealthy_count.to_f / @agent_count)
       end
     end
   end
