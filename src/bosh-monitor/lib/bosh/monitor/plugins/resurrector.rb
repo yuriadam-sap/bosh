@@ -25,6 +25,7 @@ module Bosh::Monitor
           return false
         end
 
+        Bosh::Monitor.resurrector_alert_tracker = @alert_tracker
         logger.info('Resurrector is running...')
       end
 
